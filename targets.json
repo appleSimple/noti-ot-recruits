@@ -1,0 +1,40 @@
+{
+  "targets": [
+    {
+      "name": "화성시 보건소",
+      "url": "https://www.hscity.go.kr/health/user/bbs/BD_selectBbsList.do?q_bbsCode=1003",
+      "type": "html_list_number_id",
+      "latest_n": 30
+    },
+    {
+      "name": "수원시장애인종합복지관",
+      "url": "https://suwonrehab.or.kr/bbs/board.php?bo_table=staff",
+      "type": "html_list_number_id",
+      "latest_n": 30
+    },
+    {
+      "name": "지구촌사회복지재단",
+      "url": "http://www.jwf.or.kr/bbs/board.php?bo_table=notice&sca=%EC%B1%84%EC%9A%A9%EA%B3%B5%EA%B3%A0",
+      "type": "html_list_number_id",
+      "latest_n": 30
+    },
+    {
+      "name": "화성시장애아동재활센터",
+      "url": "https://www.hs4u.or.kr/bbs/?bid=notice",
+      "type": "html_list_number_id",
+      "latest_n": 30
+    },
+    {
+      "name": "치매안심센터",
+      "url": "https://www.nid.or.kr/notification/recruit_list.aspx",
+      "type": "html_list_number_id",
+      "latest_n": 30
+    },
+    {
+      "name": "수원시보건소",
+      "url": "https://health.suwon.go.kr/board_list.asp?page_code=sub060902",
+      "type": "html_list_number_id",
+      "latest_n": 30
+    }
+  ]
+}
