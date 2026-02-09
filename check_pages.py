@@ -8,6 +8,8 @@ from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 CONFIG_FILE = "targets.json"
 STATE_FILE = "state.json"
@@ -16,8 +18,31 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHAT_ID = os.environ.get("CHAT_ID", "").strip()
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (notice-watcher; +https://github.com/)"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
 }
+
+def get_session():
+    """재시도 로직이 포함된 requests 세션 생성"""
+    session = requests.Session()
+    
+    # 재시도 전략: 총 3회, 연결 에러/읽기 타임아웃 시 재시도
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=2,  # 1초, 2초, 4초 간격으로 재시도
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET", "POST"]
+    )
+    
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    return session
 
 @dataclass
 class Item:
@@ -61,8 +86,12 @@ def fetch_html(url: str) -> tuple[str, str]:
     """
     returns: (final_url, html_text)
     - 인코딩 보정 포함
+    - 재시도 로직 포함
     """
-    r = requests.get(url, headers=HEADERS, timeout=25)
+    session = get_session()
+    
+    # 타임아웃 증가: (연결 타임아웃, 읽기 타임아웃)
+    r = session.get(url, headers=HEADERS, timeout=(15, 45), allow_redirects=True)
     r.raise_for_status()
 
     # 인코딩 보정 (특히 EUC-KR/CP949 사이트)
@@ -163,6 +192,17 @@ def run_target(target: Dict, state: Dict[str, Set[str]]):
 
     print(f"[{name}] fetched={len(items)} first5={[ (it.item_id, it.title) for it in items[:5] ]}")
 
+    # 파싱 실패 감지
+    if not items:
+        print(f"⚠️ [{name}] 파싱 실패: 글 목록을 찾을 수 없습니다. HTML 구조를 확인하세요.")
+        # 파싱 실패 시에도 텔레그램으로 알림
+        if BOT_TOKEN and CHAT_ID:
+            try:
+                telegram_send(f"⚠️ 파싱 실패 ({name})\n- URL: {url}\n- 글 목록을 찾을 수 없습니다.")
+            except:
+                pass
+        return
+
     new_items = [it for it in items if it.item_id not in seen]
     if not new_items:
         print(f"[{name}] No new items.")
@@ -187,6 +227,7 @@ def main():
         raise RuntimeError("targets.json에 targets가 비어 있습니다.")
 
     state = load_state()
+    errors = []
 
     for target in targets:
         try:
@@ -194,9 +235,17 @@ def main():
         except Exception as e:
             err_msg = f"⚠️ 크롤러 오류 ({target.get('name','unknown')})\n- {type(e).__name__}: {e}"
             print(err_msg)
-            # telegram_send(err_msg)  # 필요하면 주석 해제
+            errors.append(err_msg)
 
     save_state(state)
+    
+    # 에러가 있으면 텔레그램으로 알림 (선택적)
+    if errors and BOT_TOKEN and CHAT_ID:
+        try:
+            summary = "\n\n".join(errors)
+            telegram_send(f"📋 크롤러 실행 완료 ({len(errors)}개 에러 발생)\n\n{summary}")
+        except Exception as e:
+            print(f"텔레그램 에러 알림 전송 실패: {e}")
 
 if __name__ == "__main__":
     main()
