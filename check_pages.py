@@ -30,12 +30,13 @@ def get_session():
     """재시도 로직이 포함된 requests 세션 생성"""
     session = requests.Session()
     
-    # 재시도 전략: 총 3회, 연결 에러/읽기 타임아웃 시 재시도
+    # 재시도 전략: 총 5회, 연결 에러/읽기 타임아웃 시 재시도
     retry_strategy = Retry(
-        total=3,
-        backoff_factor=2,  # 1초, 2초, 4초 간격으로 재시도
+        total=5,
+        backoff_factor=3,  # 3초, 6초, 12초, 24초, 48초 간격으로 재시도
         status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET", "POST"]
+        allowed_methods=["GET", "POST"],
+        raise_on_status=False  # 상태 코드 에러를 바로 발생시키지 않고 재시도
     )
     
     adapter = HTTPAdapter(max_retries=retry_strategy)
@@ -90,8 +91,21 @@ def fetch_html(url: str) -> tuple[str, str]:
     """
     session = get_session()
     
-    # 타임아웃 증가: (연결 타임아웃, 읽기 타임아웃)
-    r = session.get(url, headers=HEADERS, timeout=(15, 45), allow_redirects=True)
+    # 사이트별 특별 처리
+    headers = HEADERS.copy()
+    timeout = (15, 45)  # (연결, 읽기)
+    
+    # 403 차단 우회 시도: Referer 추가
+    if "jwf.or.kr" in url:
+        headers["Referer"] = "http://www.jwf.or.kr/"
+        # 더 일반적인 User-Agent 사용
+        headers["User-Agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    
+    # 연결이 느린 사이트: 타임아웃 증가
+    if "hs4u.or.kr" in url or "hscity.go.kr" in url:
+        timeout = (30, 60)
+    
+    r = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
     r.raise_for_status()
 
     # 인코딩 보정 (특히 EUC-KR/CP949 사이트)
@@ -100,7 +114,7 @@ def fetch_html(url: str) -> tuple[str, str]:
 
     return r.url, r.text
 
-def parse_html_list_number_id(target_url: str, latest_n: int) -> List[Item]:
+def parse_html_list_number_id(target_url: str, latest_n: int, debug: bool = False) -> List[Item]:
     """
     목록에서 글번호(숫자)를 item_id로 사용.
     전형적인 테이블 목록:
@@ -119,6 +133,17 @@ def parse_html_list_number_id(target_url: str, latest_n: int) -> List[Item]:
     soup = BeautifulSoup(html, "lxml")
 
     items_by_id: Dict[str, Item] = {}
+
+    # 디버그 모드: HTML 구조 출력
+    if debug:
+        print(f"  [DEBUG] HTML 길이: {len(html)}")
+        trs = soup.find_all("tr")
+        print(f"  [DEBUG] 총 tr 개수: {len(trs)}")
+        for i, tr in enumerate(trs[:10]):  # 처음 10개만
+            tds = tr.find_all("td")
+            if tds:
+                td_texts = [td.get_text(strip=True)[:50] for td in tds[:5]]
+                print(f"  [DEBUG] tr[{i}] - td 개수: {len(tds)}, 내용: {td_texts}")
 
     # 1) 가장 안정적인 패턴: tr의 첫 td가 숫자
     for tr in soup.find_all("tr"):
@@ -174,6 +199,10 @@ def parse_html_list_number_id(target_url: str, latest_n: int) -> List[Item]:
             full_url = urljoin(final_url, href) if href and not href.lower().startswith("javascript:") else target_url
             items_by_id[no] = Item(item_id=no, title=title, url=full_url)
 
+    # 3) 여전히 비어있으면 다른 패턴 시도: td의 순서가 다를 수 있음
+    if not items_by_id and debug:
+        print(f"  [DEBUG] 패턴 1, 2 실패. 다른 패턴 탐색 중...")
+
     items = sorted(items_by_id.values(), key=lambda it: int(it.item_id), reverse=True)
     return items[:latest_n]
 
@@ -188,20 +217,24 @@ def run_target(target: Dict, state: Dict[str, Set[str]]):
 
     seen = state.get(name, set())
 
-    items = parse_html_list_number_id(url, latest_n)
+    items = parse_html_list_number_id(url, latest_n, debug=False)
 
     print(f"[{name}] fetched={len(items)} first5={[ (it.item_id, it.title) for it in items[:5] ]}")
 
-    # 파싱 실패 감지
+    # 파싱 실패 감지 - 디버그 모드로 재시도
     if not items:
-        print(f"⚠️ [{name}] 파싱 실패: 글 목록을 찾을 수 없습니다. HTML 구조를 확인하세요.")
-        # 파싱 실패 시에도 텔레그램으로 알림
-        if BOT_TOKEN and CHAT_ID:
-            try:
-                telegram_send(f"⚠️ 파싱 실패 ({name})\n- URL: {url}\n- 글 목록을 찾을 수 없습니다.")
-            except:
-                pass
-        return
+        print(f"⚠️ [{name}] 파싱 실패: 글 목록을 찾을 수 없습니다. 디버그 모드로 재시도...")
+        items = parse_html_list_number_id(url, latest_n, debug=True)
+        
+        if not items:
+            print(f"⚠️ [{name}] 디버그 모드에서도 파싱 실패.")
+            # 파싱 실패 시에도 텔레그램으로 알림
+            if BOT_TOKEN and CHAT_ID:
+                try:
+                    telegram_send(f"⚠️ 파싱 실패 ({name})\n- URL: {url}\n- 글 목록을 찾을 수 없습니다.")
+                except:
+                    pass
+            return
 
     new_items = [it for it in items if it.item_id not in seen]
     if not new_items:
