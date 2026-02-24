@@ -18,28 +18,36 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 CHAT_ID = os.environ.get("CHAT_ID", "").strip()
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept-Encoding": "gzip, deflate, br",
     "Connection": "keep-alive",
     "Upgrade-Insecure-Requests": "1",
+    "Cache-Control": "max-age=0",
+    "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
 }
 
 def get_session():
     """재시도 로직이 포함된 requests 세션 생성"""
     session = requests.Session()
     
-    # 재시도 전략: 총 5회, 연결 에러/읽기 타임아웃 시 재시도
+    # 재시도 전략: 총 8회로 증가, 더 많은 상태 코드 처리
     retry_strategy = Retry(
-        total=5,
-        backoff_factor=3,  # 3초, 6초, 12초, 24초, 48초 간격으로 재시도
-        status_forcelist=[429, 500, 502, 503, 504],
+        total=8,
+        backoff_factor=2,  # 2초, 4초, 8초, 16초... 간격으로 재시도
+        status_forcelist=[403, 408, 429, 500, 502, 503, 504],  # 403도 재시도
         allowed_methods=["GET", "POST"],
-        raise_on_status=False  # 상태 코드 에러를 바로 발생시키지 않고 재시도
+        raise_on_status=False
     )
     
-    adapter = HTTPAdapter(max_retries=retry_strategy)
+    adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=20)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
     
@@ -83,36 +91,74 @@ def telegram_send(text: str):
     r = requests.post(api, json=payload, timeout=20)
     r.raise_for_status()
 
-def fetch_html(url: str) -> tuple[str, str]:
+def fetch_html(url: str, retry_count: int = 0) -> tuple[str, str]:
     """
     returns: (final_url, html_text)
     - 인코딩 보정 포함
     - 재시도 로직 포함
+    - retry_count: 수동 재시도 횟수 (내부용)
     """
     session = get_session()
     
     # 사이트별 특별 처리
     headers = HEADERS.copy()
-    timeout = (15, 45)  # (연결, 읽기)
+    timeout = (20, 60)  # 기본 타임아웃 증가: (연결 20초, 읽기 60초)
     
-    # 403 차단 우회 시도: Referer 추가
+    # 지구촌사회복지재단: 403 차단 우회
     if "jwf.or.kr" in url:
         headers["Referer"] = "http://www.jwf.or.kr/"
-        # 더 일반적인 User-Agent 사용
-        headers["User-Agent"] = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        headers["Origin"] = "http://www.jwf.or.kr"
+        # 다양한 User-Agent 시도
+        user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        ]
+        headers["User-Agent"] = user_agents[retry_count % len(user_agents)]
+        timeout = (30, 90)
     
-    # 연결이 느린 사이트: 타임아웃 증가
-    if "hs4u.or.kr" in url or "hscity.go.kr" in url:
-        timeout = (30, 60)
+    # 화성시장애아동재활센터: 연결 타임아웃 대비
+    if "hs4u.or.kr" in url:
+        timeout = (45, 90)  # 타임아웃 대폭 증가
+        headers["Referer"] = "https://www.hs4u.or.kr/"
     
-    r = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-    r.raise_for_status()
-
-    # 인코딩 보정 (특히 EUC-KR/CP949 사이트)
-    if not r.encoding or (r.encoding.lower() in ["iso-8859-1", "latin-1"]):
-        r.encoding = r.apparent_encoding or r.encoding
-
-    return r.url, r.text
+    # 치매안심센터: ASP.NET 페이지
+    if "nid.or.kr" in url:
+        timeout = (30, 90)
+        headers["Referer"] = "https://www.nid.or.kr/"
+    
+    # 수원시보건소: ASP 페이지
+    if "health.suwon.go.kr" in url:
+        timeout = (30, 90)
+        headers["Referer"] = "https://health.suwon.go.kr/"
+    
+    try:
+        r = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+        r.raise_for_status()
+        
+        # 인코딩 보정 (특히 EUC-KR/CP949 사이트)
+        if not r.encoding or (r.encoding.lower() in ["iso-8859-1", "latin-1"]):
+            r.encoding = r.apparent_encoding or r.encoding
+        
+        return r.url, r.text
+        
+    except requests.exceptions.Timeout as e:
+        # 타임아웃 발생 시 한 번 더 재시도 (최대 2회)
+        if retry_count < 2:
+            print(f"  [재시도 {retry_count + 1}/2] 타임아웃 발생, 재시도 중...")
+            time.sleep(5)  # 5초 대기 후 재시도
+            return fetch_html(url, retry_count + 1)
+        else:
+            raise
+    
+    except requests.exceptions.HTTPError as e:
+        # 403 등 HTTP 에러 시 한 번 더 재시도
+        if e.response.status_code == 403 and retry_count < 2:
+            print(f"  [재시도 {retry_count + 1}/2] 403 오류, User-Agent 변경 후 재시도...")
+            time.sleep(3)
+            return fetch_html(url, retry_count + 1)
+        else:
+            raise
 
 def parse_nid_or_kr(soup: BeautifulSoup, base_url: str, latest_n: int, debug: bool = False) -> List[Item]:
     """치매안심센터: recruit_view.aspx?no=XXX 형식"""
@@ -120,6 +166,13 @@ def parse_nid_or_kr(soup: BeautifulSoup, base_url: str, latest_n: int, debug: bo
     
     if debug:
         print(f"  [DEBUG] 치매안심센터 파서 실행")
+        all_links = soup.find_all("a", href=True)
+        print(f"  [DEBUG] 전체 링크 개수: {len(all_links)}")
+        recruit_links = [a for a in all_links if "recruit" in a.get("href", "").lower()]
+        print(f"  [DEBUG] recruit 관련 링크: {len(recruit_links)}")
+        if recruit_links:
+            for i, a in enumerate(recruit_links[:3]):
+                print(f"  [DEBUG]   링크 {i+1}: {a.get('href', '')[:100]}")
     
     # recruit_view.aspx?no= 링크 찾기
     for a in soup.find_all("a", href=True):
@@ -144,6 +197,8 @@ def parse_nid_or_kr(soup: BeautifulSoup, base_url: str, latest_n: int, debug: bo
     
     if debug:
         print(f"  [DEBUG] 치매안심센터: {len(items_by_id)}개 항목 발견")
+        if items_by_id:
+            print(f"  [DEBUG] 첫 번째 항목: {list(items_by_id.values())[0]}")
     
     items = sorted(items_by_id.values(), key=lambda it: int(it.item_id), reverse=True)
     return items[:latest_n]
@@ -325,41 +380,44 @@ def run_target(target: Dict, state: Dict[str, Set[str]]):
 
     seen = state.get(name, set())
 
-    items = parse_html_list_number_id(url, latest_n, debug=False)
-
-    print(f"[{name}] fetched={len(items)} first5={[ (it.item_id, it.title) for it in items[:5] ]}")
-
-    # 파싱 실패 감지 - 디버그 모드로 재시도
-    if not items:
-        print(f"⚠️ [{name}] 파싱 실패: 글 목록을 찾을 수 없습니다. 디버그 모드로 재시도...")
-        items = parse_html_list_number_id(url, latest_n, debug=True)
+    try:
+        items = parse_html_list_number_id(url, latest_n, debug=False)
         
+        print(f"[{name}] fetched={len(items)} first5={[ (it.item_id, it.title) for it in items[:5] ]}")
+
+        # 파싱 실패 감지 - 디버그 모드로 재시도
         if not items:
-            print(f"⚠️ [{name}] 디버그 모드에서도 파싱 실패.")
-            # 파싱 실패 시에도 텔레그램으로 알림
-            if BOT_TOKEN and CHAT_ID:
-                try:
-                    telegram_send(f"⚠️ 파싱 실패 ({name})\n- URL: {url}\n- 글 목록을 찾을 수 없습니다.")
-                except:
-                    pass
+            print(f"⚠️ [{name}] 파싱 실패: 글 목록을 찾을 수 없습니다. 디버그 모드로 재시도...")
+            items = parse_html_list_number_id(url, latest_n, debug=True)
+            
+            if not items:
+                print(f"⚠️ [{name}] 디버그 모드에서도 파싱 실패.")
+                raise RuntimeError(f"파싱 실패: 글 목록을 찾을 수 없습니다")
+
+        new_items = [it for it in items if it.item_id not in seen]
+        if not new_items:
+            print(f"[{name}] No new items.")
             return
 
-    new_items = [it for it in items if it.item_id not in seen]
-    if not new_items:
-        print(f"[{name}] No new items.")
-        return
+        # 오래된 것부터 알림 보내기
+        new_items.sort(key=lambda it: int(it.item_id))
 
-    # 오래된 것부터 알림 보내기
-    new_items.sort(key=lambda it: int(it.item_id))
+        for it in new_items:
+            msg = f"🆕 새 글 ({name})\n- {it.title}\n- {it.url}"
+            telegram_send(msg)
+            print(f"[{name}] Sent: {it.item_id} {it.title}")
+            seen.add(it.item_id)
+            time.sleep(0.7)
 
-    for it in new_items:
-        msg = f"🆕 새 글 ({name})\n- {it.title}\n- {it.url}"
-        telegram_send(msg)
-        print(f"[{name}] Sent: {it.item_id} {it.title}")
-        seen.add(it.item_id)
-        time.sleep(0.7)
-
-    state[name] = seen
+        state[name] = seen
+        
+    except requests.exceptions.Timeout as e:
+        # 타임아웃 에러를 명확히 표시
+        raise requests.exceptions.Timeout(f"연결 타임아웃: {url}") from e
+    except requests.exceptions.HTTPError as e:
+        # HTTP 에러를 명확히 표시
+        status_code = e.response.status_code if hasattr(e, 'response') and e.response else 'unknown'
+        raise requests.exceptions.HTTPError(f"HTTP {status_code} 오류: {url}") from e
 
 def main():
     config = load_config()
@@ -370,9 +428,14 @@ def main():
     state = load_state()
     errors = []
 
-    for target in targets:
+    for i, target in enumerate(targets):
         try:
             run_target(target, state)
+            
+            # 각 사이트 크롤링 사이에 딜레이 추가 (마지막 제외)
+            if i < len(targets) - 1:
+                time.sleep(2)
+                
         except Exception as e:
             err_msg = f"⚠️ 크롤러 오류 ({target.get('name','unknown')})\n- {type(e).__name__}: {e}"
             print(err_msg)
