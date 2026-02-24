@@ -114,6 +114,103 @@ def fetch_html(url: str) -> tuple[str, str]:
 
     return r.url, r.text
 
+def parse_nid_or_kr(soup: BeautifulSoup, base_url: str, latest_n: int, debug: bool = False) -> List[Item]:
+    """치매안심센터: recruit_view.aspx?no=XXX 형식"""
+    items_by_id: Dict[str, Item] = {}
+    
+    if debug:
+        print(f"  [DEBUG] 치매안심센터 파서 실행")
+    
+    # recruit_view.aspx?no= 링크 찾기
+    for a in soup.find_all("a", href=True):
+        href = a.get("href", "")
+        if "recruit_view.aspx" in href and "no=" in href:
+            # no= 파라미터 추출
+            no_match = re.search(r'[?&]no=(\d+)', href)
+            if not no_match:
+                continue
+            
+            item_id = no_match.group(1)
+            title = a.get_text(strip=True)
+            
+            # [채용중] 같은 태그 제거
+            title = re.sub(r'\[채용중\]|\[채용종료\]', '', title).strip()
+            
+            if not title:
+                continue
+            
+            full_url = urljoin(base_url, href)
+            items_by_id[item_id] = Item(item_id=item_id, title=title, url=full_url)
+    
+    if debug:
+        print(f"  [DEBUG] 치매안심센터: {len(items_by_id)}개 항목 발견")
+    
+    items = sorted(items_by_id.values(), key=lambda it: int(it.item_id), reverse=True)
+    return items[:latest_n]
+
+def parse_health_suwon(soup: BeautifulSoup, base_url: str, latest_n: int, debug: bool = False) -> List[Item]:
+    """수원시보건소: URL의 no= 파라미터 추출"""
+    items_by_id: Dict[str, Item] = {}
+    
+    if debug:
+        print(f"  [DEBUG] 수원시보건소 파서 실행")
+    
+    for a in soup.find_all("a", href=True):
+        href = a.get("href", "")
+        if "board_view.asp" in href and "no=" in href:
+            # no= 파라미터 추출
+            no_match = re.search(r'[?&]no=(\d+)', href)
+            if not no_match:
+                continue
+            
+            item_id = no_match.group(1)
+            title = a.get_text(strip=True)
+            
+            if not title:
+                continue
+            
+            full_url = urljoin(base_url, href)
+            items_by_id[item_id] = Item(item_id=item_id, title=title, url=full_url)
+    
+    if debug:
+        print(f"  [DEBUG] 수원시보건소: {len(items_by_id)}개 항목 발견")
+    
+    items = sorted(items_by_id.values(), key=lambda it: int(it.item_id), reverse=True)
+    return items[:latest_n]
+
+def parse_hs4u(soup: BeautifulSoup, base_url: str, latest_n: int, debug: bool = False) -> List[Item]:
+    """화성시장애아동재활센터: seq= 파라미터 추출"""
+    items_by_id: Dict[str, Item] = {}
+    
+    if debug:
+        print(f"  [DEBUG] 화성시장애아동재활센터 파서 실행")
+    
+    for a in soup.find_all("a", href=True):
+        href = a.get("href", "")
+        if "subAct=view" in href and "seq=" in href:
+            # seq= 파라미터 추출
+            seq_match = re.search(r'[?&]seq=(\d+)', href)
+            if not seq_match:
+                continue
+            
+            item_id = seq_match.group(1)
+            title = a.get_text(strip=True)
+            
+            # 아이콘 텍스트 제거
+            title = title.replace('[새글]', '').replace('[이미지]', '').replace('[다운로드]', '').strip()
+            
+            if not title:
+                continue
+            
+            full_url = urljoin(base_url, href)
+            items_by_id[item_id] = Item(item_id=item_id, title=title, url=full_url)
+    
+    if debug:
+        print(f"  [DEBUG] 화성시장애아동재활센터: {len(items_by_id)}개 항목 발견")
+    
+    items = sorted(items_by_id.values(), key=lambda it: int(it.item_id), reverse=True)
+    return items[:latest_n]
+
 def parse_html_list_number_id(target_url: str, latest_n: int, debug: bool = False) -> List[Item]:
     """
     목록에서 글번호(숫자)를 item_id로 사용.
@@ -133,6 +230,17 @@ def parse_html_list_number_id(target_url: str, latest_n: int, debug: bool = Fals
     soup = BeautifulSoup(html, "lxml")
 
     items_by_id: Dict[str, Item] = {}
+    
+    # 사이트별 특별 파서
+    if "nid.or.kr" in target_url:
+        # 치매안심센터: recruit_view.aspx?no=XXX 형식
+        return parse_nid_or_kr(soup, final_url, latest_n, debug)
+    elif "health.suwon.go.kr" in target_url:
+        # 수원시보건소: URL에서 no= 파라미터 추출
+        return parse_health_suwon(soup, final_url, latest_n, debug)
+    elif "hs4u.or.kr" in target_url:
+        # 화성시장애아동재활센터: seq= 파라미터 추출
+        return parse_hs4u(soup, final_url, latest_n, debug)
 
     # 디버그 모드: HTML 구조 출력
     if debug:
