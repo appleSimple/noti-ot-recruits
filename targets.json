@@ -37,8 +37,8 @@
       "latest_n": 30
     },
     {
-      "name": "수원 생애주기별 정신건강복지센터",
-      "url": "http://www.suwonmental.org/SBoard/SBoard.asp?BoardID=notice",
+      "name": "수원/경기도 정신건강복지센터",
+      "url": "https://www.mentalhealth.or.kr/Community_N/EmployInfo/List.asp",
       "type": "html_list_number_id",
       "latest_n": 30
     }
