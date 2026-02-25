@@ -41,6 +41,12 @@
       "url": "https://www.mentalhealth.or.kr/Community_N/EmployInfo/List.asp",
       "type": "html_list_number_id",
       "latest_n": 30
+    },
+    {
+      "name": "블루터치",
+      "url": "https://blutouch.net/plus/notice/hire",
+      "type": "html_list_number_id",
+      "latest_n": 30
     }
   ]
 }
