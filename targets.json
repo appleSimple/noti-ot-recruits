@@ -35,6 +35,12 @@
       "url": "https://health.suwon.go.kr/board_list.asp?page_code=sub060902",
       "type": "html_list_number_id",
       "latest_n": 30
+    },
+    {
+      "name": "수원 생애주기별 정신건강복지센터",
+      "url": "http://www.suwonmental.org/SBoard/SBoard.asp?BoardID=notice",
+      "type": "html_list_number_id",
+      "latest_n": 30
     }
   ]
 }
